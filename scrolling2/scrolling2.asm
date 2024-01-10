@@ -26,7 +26,10 @@
 .const SCREEN_HEIGHT = 25
 
 // video memory locations are defined here as they are application specific
-.const SCREEN_CHAR_RAM = $0400
+// note that we define 2 locations so that we can use double buffering to 
+// try to smooth out the scrolling
+.const SCREEN_CHAR_BUFFER_1 = $0400
+.const SCREEN_CHAR_BUFFER_2 = $0800
 
 
 // keyboard scan codes
@@ -102,25 +105,8 @@ main:
 // Interrupt Handler
 main_loop:
 
-    lda vic.raster_scan_line
-    cmp #251
-    bne main_loop
-
-///////////////////
-//     dec delay
-//     lda delay
-//     cmp #0
-//     beq !+
-//     jmp main_loop
-
-// !:
-//     // reset the delay
-//     lda #25
-//     sta delay
-/////////////////////
-
-    // raster time
-    inc vic.border_colour
+    // wait for a good raster position
+    wait_for_raster(251)
 
     // scan for a key down
     jsr SCNKEY
@@ -141,7 +127,7 @@ handle_down:
     jmp handle_up
 !:
 
-    // Check bounds!
+    // Check bounds
     lda background_y_pos
     cmp #MAP_HEIGHT - SCREEN_HEIGHT - 1
     bne !+ 
@@ -162,24 +148,88 @@ handle_down:
     
     lda backgound_y_pos_fine
     and #7
-    cmp #7
-    bne end_down
+    beq !+
+    jmp end_down
+!:
     inc background_y_pos
-    shift_screen_up()
+
+    {
+        lda background_y_pos
+        and #$01
+        beq even
+        // odd case
+        shift_screen_up(SCREEN_CHAR_BUFFER_1, SCREEN_CHAR_BUFFER_2)
+        jmp shift_done
+    even:
+        shift_screen_up(SCREEN_CHAR_BUFFER_2, SCREEN_CHAR_BUFFER_1)
+    shift_done:
+    }
+
+    // wait for a good raster position
+    wait_for_raster(251)
+
+    // toggle the char buffer
+    lda vic.memory_pointers
+    eor #$30
+    sta vic.memory_pointers
 end_down:
     jmp loop_done
 
 handle_up:
     // check for scroll up
     cmp #SC_W
-    bne handle_right
+    beq !+
+    jmp handle_right
+!:
 
-    // TODO: Check bounds!
+    // Check bounds!
+    lda background_y_pos
+    cmp #0
+    bne !+ 
+    jmp loop_done
+!:
 
-    // scroll right
-    // lda #WHITE
-    // sta vic.border_colour
+    // scroll up
+    lda backgound_y_pos_fine
+    clc
+    adc #1
+    sta backgound_y_pos_fine
+    and #7
+    sta scroll_temp
+    lda vic.control_register
+    and #$f8
+    ora scroll_temp
+    sta vic.control_register
+    
+    lda backgound_y_pos_fine
+    and #7
+    cmp #7
+    beq !+ 
+    jmp end_up
+!:
+    dec background_y_pos
 
+    {
+        lda background_y_pos
+        and #$01
+        beq even
+        // odd case
+        shift_screen_down(SCREEN_CHAR_BUFFER_1, SCREEN_CHAR_BUFFER_2)
+        jmp shift_done
+    even:
+        shift_screen_down(SCREEN_CHAR_BUFFER_2, SCREEN_CHAR_BUFFER_1)
+    shift_done:
+    }
+
+    // wait for a good raster position
+    wait_for_raster(251)
+
+    // toggle the char buffer
+    lda vic.memory_pointers
+    eor #$30
+    sta vic.memory_pointers
+    
+end_up:
     jmp loop_done
 
 handle_right:
@@ -208,7 +258,7 @@ handle_left:
     
 loop_done:
     // raster time
-    dec vic.border_colour
+    //dec vic.border_colour
 
     jmp main_loop
 
@@ -305,40 +355,53 @@ done_frame:
     rts
 
 ///////////////////////////////////////////////////////////////////
+// name: wait_for_raster
+// Params: 
+//      line - a single byte raster line to wait for
+// Descriptoin: Delays execution until the specified raster lime
+//              has started drawing
+////////////////////////////////////////////////////////////////////
+.macro wait_for_raster(line) {
+!: 
+    lda vic.raster_scan_line
+    cmp #line
+    bne !-
+}
+///////////////////////////////////////////////////////////////////
 // name: shift_screen_up
 // Descriptoin: Shifts the screen up and populate the new row from 
 //              the screen map
 ////////////////////////////////////////////////////////////////////
-.macro shift_screen_up() {
+.macro shift_screen_up(screen_src, screen_dst) {
 
     // lda #RED
     // sta vic.border_colour
 
     ldx #0
 !:
-    lda $0400 + SCREEN_WIDTH, x
-    sta $0400, x 
+    lda screen_src + SCREEN_WIDTH, x
+    sta screen_dst, x 
     inx 
     bne !-
 
     ldx #0
 !:
-    lda $0400 + SCREEN_WIDTH + 256, x
-    sta $0400 + 256, x 
+    lda screen_src + SCREEN_WIDTH + 256, x
+    sta screen_dst + 256, x 
     inx 
     bne !-
 
     ldx #0
 !:
-    lda $0400 + SCREEN_WIDTH + 512, x
-    sta $0400 + 512, x 
+    lda screen_src + SCREEN_WIDTH + 512, x
+    sta screen_dst + 512, x 
     inx 
     bne !-
 
     ldx #0
 !:
-    lda $0400 + SCREEN_WIDTH + [256 * 3], x
-    sta $0400 +  [256 * 3], x 
+    lda screen_src + SCREEN_WIDTH + [256 * 3], x
+    sta screen_dst +  [256 * 3], x 
     inx 
     cpx #235
     bne !-
@@ -356,15 +419,69 @@ done_frame:
     ldy #0
 !:
     lda ($fb), y
-    //lda #'A'
-    sta $0400 + [24 * SCREEN_WIDTH], y 
+    sta screen_dst + [24 * SCREEN_WIDTH], y 
     iny 
     cpy #SCREEN_WIDTH
     bne !- 
 }
 
+///////////////////////////////////////////////////////////////////
+// name: shift_screen_down
+// Descriptoin: Shifts the screen down and populate the new row from 
+//              the screen map
+////////////////////////////////////////////////////////////////////
+.macro shift_screen_down(screen_src, screen_dst) {
+    .const SCREEN_CHAR_BUFFER_1_END_SRC = screen_src + $03e7
+    .const SCREEN_CHAR_BUFFER_1_END_DST = screen_dst + $03e7
 
-// Macros
+    ldx #$ff
+!:
+    lda SCREEN_CHAR_BUFFER_1_END_SRC - SCREEN_WIDTH - $ff, x
+    sta SCREEN_CHAR_BUFFER_1_END_DST - $ff, x 
+    dex 
+    bne !-
+
+    ldx #$ff
+!:
+    lda SCREEN_CHAR_BUFFER_1_END_SRC - $ff - SCREEN_WIDTH - $ff, x
+    sta SCREEN_CHAR_BUFFER_1_END_DST - $ff - $ff,  x 
+    dex 
+    bne !-
+
+    ldx #$ff
+!:
+    lda SCREEN_CHAR_BUFFER_1_END_SRC - $1fe - SCREEN_WIDTH - $ff, x
+    sta SCREEN_CHAR_BUFFER_1_END_DST - $1fe - $ff,  x 
+    dex 
+    bne !-
+
+    ldx #$ff
+!:
+    lda SCREEN_CHAR_BUFFER_1_END_SRC - $2fd - SCREEN_WIDTH - $ff, x
+    sta SCREEN_CHAR_BUFFER_1_END_DST - $2fd - $ff,  x 
+    dex 
+    cpx #20
+    bne !-
+
+    // get an index of the start of the correct character data row
+    lda background_y_pos
+    asl 
+    tax
+    lda map_row_char_start_addresses, x 
+    sta $fb 
+    inx 
+    lda map_row_char_start_addresses, x
+    sta $fc
+
+    // copy the row to the start of the screen
+    ldy #0
+!:
+    lda ($fb), y
+    sta screen_dst, y 
+    iny 
+    cpy #SCREEN_WIDTH
+    bne !- 
+}
 
     // resets the zp to the original values so they can be re-used
     // for calculations
@@ -384,9 +501,9 @@ done_frame:
     lda #>map_character_codes
     sta $fc
 
-    lda #<SCREEN_CHAR_RAM
+    lda #<SCREEN_CHAR_BUFFER_1
     sta $fd
-    lda #>SCREEN_CHAR_RAM
+    lda #>SCREEN_CHAR_BUFFER_1
     sta $fe
 }
 
