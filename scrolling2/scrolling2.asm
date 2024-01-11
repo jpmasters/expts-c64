@@ -6,9 +6,6 @@
 
     Zero Page:
     ==========
-    ZP: This is all the ZP we can use without corrupting BASIC although we *could*
-    get around it by copying ZP somewhere else and then copy it back when we're done.
-    The stack might not be a great option though because it's the same size as ZP!
 
     The addresses below are used as working memory to allow the blitting of character
     and colour data to the VIC II memory bank. It's currently assuming that the VIC
@@ -69,17 +66,17 @@ delay: .byte 25
 
 main:
 
-	// set to 25 line extended color text mode and turn on the screen
-	lda #[vic.CR_EXTENDED_COLOUR_TEXT + vic.CR_BLANK_SCREEN_TO_BORDER_COLOUR + 7]
+    // set to 25 line extended color text mode and turn on the screen
+    lda #[vic.CR_EXTENDED_COLOUR_TEXT + vic.CR_BLANK_SCREEN_TO_BORDER_COLOUR + 7]
     sta vic.control_register
 
-	// disable SHIFT-Commodore
-	lda #$80
-	sta $0291
+    // disable SHIFT-Commodore
+    lda #$80
+    sta $0291
 
-	// set screen memory ($0400) and charset bitmap offset ($2000)
-	lda #$18
-	sta vic.memory_pointers
+    // set screen memory ($0400) and charset bitmap offset ($2000)
+    lda #$18
+    sta vic.memory_pointers
 
     // set border and screen colours
     lda #BLACK
@@ -102,7 +99,7 @@ main:
     jsr draw_entire_screen
 
 
-// Interrupt Handler
+// main game loop
 main_loop:
 
     // wait for a good raster position
@@ -129,7 +126,7 @@ handle_down:
 
     // Check bounds
     lda background_y_pos
-    cmp #MAP_HEIGHT - SCREEN_HEIGHT - 1
+    cmp #MAP_HEIGHT - SCREEN_HEIGHT - 2
     bne !+ 
     jmp loop_done
 !:
