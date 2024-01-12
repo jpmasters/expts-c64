@@ -51,18 +51,21 @@ BasicUpstart2(main)
 scroll_offset_lo: .byte 0
 scroll_offset_hi: .byte 0
 
-background_x_pos_lo: .byte 0
-background_x_pos_hi: .byte 0
+background_x_pos_fine: .byte 0
+background_x_pos:      .byte 35
 
 backgound_y_pos_fine: .byte 7
 background_y_pos:     .byte 0
 
 // these pre-calculated offsets make it easier to find rows in the map to display
+// TODO: Either turn these into lo hi tables or remove them and use the map_row_offsets
+//       tables instead (just add the base address where needed)
 map_row_char_start_addresses: .fillword MAP_HEIGHT, map_character_codes + (i * MAP_WIDTH)
 map_row_colour_start_addresses: .fillword MAP_HEIGHT, map_colour_data + (i * MAP_WIDTH)
 
+map_row_offets: .lohifill MAP_HEIGHT, i * MAP_WIDTH
+
 scroll_temp: .byte 0
-delay: .byte 25
 
 main:
 
@@ -266,6 +269,9 @@ draw_entire_screen:
 	// draw screen
     reset_zp()
 
+    // calculate the scroll address
+    x_y_to_scroll_offset()
+
     // apply xpos to the map character data ptr
     lda $fb
     clc
@@ -353,9 +359,9 @@ done_frame:
 
 ///////////////////////////////////////////////////////////////////
 // name: wait_for_raster
-// Params: 
+// Parameters: 
 //      line - a single byte raster line to wait for
-// Descriptoin: Delays execution until the specified raster lime
+// Description: Delays execution until the specified raster lime
 //              has started drawing
 ////////////////////////////////////////////////////////////////////
 .macro wait_for_raster(line) {
@@ -364,8 +370,37 @@ done_frame:
     cmp #line
     bne !-
 }
+
+///////////////////////////////////////////////////////////////////
+// name: x_y_to_scroll_offset
+// Description: converts the background x y positions into an offset
+//              for use with the character or colour maps.
+////////////////////////////////////////////////////////////////////
+.macro x_y_to_scroll_offset() {
+
+    // start with y
+    ldx background_y_pos
+    lda map_row_offets.lo, x 
+    sta scroll_offset_lo
+    lda map_row_offets.hi, x 
+    sta scroll_offset_hi
+
+    // add x
+    lda scroll_offset_lo
+    clc
+    adc background_x_pos
+    sta scroll_offset_lo
+    bcc !+ 
+    inc scroll_offset_hi
+!:
+}
+
 ///////////////////////////////////////////////////////////////////
 // name: shift_screen_up
+// Parameters:
+//      screen_src: address of the buffer holding the source data
+//      screen_dst: address of the buffer that will receive the
+//                  data
 // Descriptoin: Shifts the screen up and populate the new row from 
 //              the screen map
 ////////////////////////////////////////////////////////////////////
@@ -403,6 +438,7 @@ done_frame:
     cpx #235
     bne !-
 
+    // locate the map char start address based on background y pos
     lda background_y_pos
     adc #25
     asl 
@@ -412,6 +448,15 @@ done_frame:
     inx 
     lda map_row_char_start_addresses, x
     sta $fc
+
+    // add in the x pos
+    lda $fb
+    clc
+    adc background_x_pos
+    sta $fb
+    bcc !+ 
+    inc $fc 
+!:
 
     ldy #0
 !:
@@ -469,6 +514,15 @@ done_frame:
     inx 
     lda map_row_char_start_addresses, x
     sta $fc
+
+    // add in the x pos
+    lda $fb
+    clc
+    adc background_x_pos
+    sta $fb
+    bcc !+ 
+    inc $fc 
+!:
 
     // copy the row to the start of the screen
     ldy #0
