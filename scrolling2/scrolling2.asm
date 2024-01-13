@@ -133,8 +133,13 @@ handle_down:
     bne !+ 
     jmp loop_done
 !:
-
+    ///////////////////////////////////////////
     // scroll down
+    ///////////////////////////////////////////
+
+    // start by decrementing the hardware scroll
+    // value whic is in the 3 least significant
+    // bits of the vic control register
     lda backgound_y_pos_fine
     sec
     sbc #1
@@ -146,25 +151,35 @@ handle_down:
     ora scroll_temp
     sta vic.control_register
     
+    // if the hardware scroll has reached it's
+    // maximum value, we need to shift the screen
+    // up a row before it cycles back to 0
     lda backgound_y_pos_fine
     and #7
     beq !+
     jmp end_down
 !:
+    // if we get here, it's because we need to shift
+    // the whole screen up by one row.
+
+    // update our 'coarse' background y position
     inc background_y_pos
 
-    {
-        lda background_y_pos
-        and #$01
-        beq even
-        // odd case
-        shift_screen_up(SCREEN_CHAR_BUFFER_1, SCREEN_CHAR_BUFFER_2)
-        jmp shift_done
-    even:
-        shift_screen_up(SCREEN_CHAR_BUFFER_2, SCREEN_CHAR_BUFFER_1)
-    shift_done:
-    }
-
+    // We're double buffering to keep the scroll smooth
+    // the vic memory pointers register holds a value
+    // indicating the offset of the screen buffer.
+    // We're going to assemble the new screen in a 
+    // different buffer and then flip the vic over to
+    // to that buffer when we're done.
+    lda vic.memory_pointers
+    and #$10
+    beq !+
+    shift_screen_up(SCREEN_CHAR_BUFFER_1, SCREEN_CHAR_BUFFER_2)
+    jmp !++
+!:
+    shift_screen_up(SCREEN_CHAR_BUFFER_2, SCREEN_CHAR_BUFFER_1)
+!:
+    
     // wait for a good raster position
     wait_for_raster(251)
 
@@ -172,6 +187,7 @@ handle_down:
     lda vic.memory_pointers
     eor #$30
     sta vic.memory_pointers
+
 end_down:
     jmp loop_done
 
@@ -188,8 +204,13 @@ handle_up:
     bne !+ 
     jmp loop_done
 !:
-
+    ///////////////////////////////////////////
     // scroll up
+    ///////////////////////////////////////////
+
+    // start by incrementing the hardware scroll
+    // value whic is in the 3 least significant
+    // bits of the vic control register
     lda backgound_y_pos_fine
     clc
     adc #1
@@ -201,25 +222,35 @@ handle_up:
     ora scroll_temp
     sta vic.control_register
     
+    // if the hardware scroll has reached it's
+    // maximum value, we need to shift the screen
+    // down a row before it cycles back to 0
     lda backgound_y_pos_fine
     and #7
     cmp #7
     beq !+ 
     jmp end_up
 !:
+    // if we get here, it's because we need to shift
+    // the whole screen down by one row.
+
+    // update our 'coarse' background y position
     dec background_y_pos
 
-    {
-        lda background_y_pos
-        and #$01
-        beq even
-        // odd case
-        shift_screen_down(SCREEN_CHAR_BUFFER_1, SCREEN_CHAR_BUFFER_2)
-        jmp shift_done
-    even:
-        shift_screen_down(SCREEN_CHAR_BUFFER_2, SCREEN_CHAR_BUFFER_1)
-    shift_done:
-    }
+    // We're double buffering to keep the scroll smooth
+    // the vic memory pointers register holds a value
+    // indicating the offset of the screen buffer.
+    // We're going to assemble the new screen in a 
+    // different buffer and then flip the vic over to
+    // to that buffer when we're done.
+    lda vic.memory_pointers
+    and #$10
+    beq !+
+    shift_screen_down(SCREEN_CHAR_BUFFER_1, SCREEN_CHAR_BUFFER_2)
+    jmp !++
+!:
+    shift_screen_down(SCREEN_CHAR_BUFFER_2, SCREEN_CHAR_BUFFER_1)
+!:
 
     // wait for a good raster position
     wait_for_raster(251)
@@ -262,11 +293,15 @@ loop_done:
 
     jmp main_loop
 
-
+////////////////////////////////////////////////////////////////
 // Subroutines
+////////////////////////////////////////////////////////////////
+
     // performs a blit from the character and colour maps into video memory
 draw_entire_screen:
-	// draw screen
+    
+    // reset the zero page locations we're
+    // going to be using
     reset_zp()
 
     // calculate the scroll address
@@ -299,16 +334,16 @@ draw_entire_screen:
     sta $fa
 
     // draw a row of the screen
-	ldx #$00
+    ldx #$00
 l1: ldy #$00
 
-l2:	lda ($fb),y
-	sta ($fd),y
-	lda ($f9),y
-	sta ($f7),y
-	iny
+l2: lda ($fb),y
+    sta ($fd),y
+    lda ($f9),y
+    sta ($f7),y
+    iny
     cpy #SCREEN_WIDTH
-	bne l2
+    bne l2
 
     // add 40 to the screen ptr
     lda $fd
