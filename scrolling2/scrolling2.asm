@@ -44,7 +44,7 @@ BasicUpstart2(main)
 #importonce
 #import "./include/vic.asm"
 
-*=$1000
+*=$1000 "Code"
 // The scroll offset is a 16 bit offset into both the character and colour data and
 // holds the starting point for blits into character and colour video RAM. To caluclate
 // the offset we need to use the equation (ypos * MAP_WIDTH) + xpos.
@@ -52,16 +52,16 @@ scroll_offset_lo: .byte 0
 scroll_offset_hi: .byte 0
 
 background_x_pos_fine: .byte 0
-background_x_pos:      .byte 35
+background_x_pos:      .byte 0
 
-backgound_y_pos_fine: .byte 7
+background_y_pos_fine: .byte 7
 background_y_pos:     .byte 0
 
 // these pre-calculated offsets make it easier to find rows in the map to display
 // TODO: Either turn these into lo hi tables or remove them and use the map_row_offsets
 //       tables instead (just add the base address where needed)
-map_row_char_start_addresses: .fillword MAP_HEIGHT, map_character_codes + (i * MAP_WIDTH)
-map_row_colour_start_addresses: .fillword MAP_HEIGHT, map_colour_data + (i * MAP_WIDTH)
+map_row_char_start_addresses: .lohifill MAP_HEIGHT, map_character_codes + (i * MAP_WIDTH)
+map_row_colour_start_addresses: .lohifill MAP_HEIGHT, map_colour_data + (i * MAP_WIDTH)
 
 map_row_offets: .lohifill MAP_HEIGHT, i * MAP_WIDTH
 
@@ -72,6 +72,12 @@ main:
     // set to 25 line extended color text mode and turn on the screen
     lda #[vic.CR_EXTENDED_COLOUR_TEXT + vic.CR_BLANK_SCREEN_TO_BORDER_COLOUR + 7]
     sta vic.control_register
+
+    // set to 38 column mode
+    lda vic.control_register_2
+    and #$ff - vic.CR2_38_40_COL_SELECT
+    sta vic.control_register_2
+
 
     // disable SHIFT-Commodore
     lda #$80
@@ -112,7 +118,7 @@ main_loop:
     jsr SCNKEY
     lda 203
     cmp #SC_NONE
-	bne handle_down
+    bne handle_down
 
     // lda #BLACK
     // sta vic.border_colour
@@ -138,12 +144,12 @@ handle_down:
     ///////////////////////////////////////////
 
     // start by decrementing the hardware scroll
-    // value whic is in the 3 least significant
+    // value which is in the 3 least significant
     // bits of the vic control register
-    lda backgound_y_pos_fine
+    lda background_y_pos_fine
     sec
     sbc #1
-    sta backgound_y_pos_fine
+    sta background_y_pos_fine
     and #7
     sta scroll_temp
     lda vic.control_register
@@ -154,7 +160,7 @@ handle_down:
     // if the hardware scroll has reached it's
     // maximum value, we need to shift the screen
     // up a row before it cycles back to 0
-    lda backgound_y_pos_fine
+    lda background_y_pos_fine
     and #7
     beq !+
     jmp end_down
@@ -165,8 +171,8 @@ handle_down:
     // update our 'coarse' background y position
     inc background_y_pos
 
-    // We're double buffering to keep the scroll smooth
-    // the vic memory pointers register holds a value
+    // We're double buffering to keep the scroll smooth.
+    // The vic memory pointers register holds a value
     // indicating the offset of the screen buffer.
     // We're going to assemble the new screen in a 
     // different buffer and then flip the vic over to
@@ -211,10 +217,10 @@ handle_up:
     // start by incrementing the hardware scroll
     // value whic is in the 3 least significant
     // bits of the vic control register
-    lda backgound_y_pos_fine
+    lda background_y_pos_fine
     clc
     adc #1
-    sta backgound_y_pos_fine
+    sta background_y_pos_fine
     and #7
     sta scroll_temp
     lda vic.control_register
@@ -225,7 +231,7 @@ handle_up:
     // if the hardware scroll has reached it's
     // maximum value, we need to shift the screen
     // down a row before it cycles back to 0
-    lda backgound_y_pos_fine
+    lda background_y_pos_fine
     and #7
     cmp #7
     beq !+ 
@@ -237,8 +243,8 @@ handle_up:
     // update our 'coarse' background y position
     dec background_y_pos
 
-    // We're double buffering to keep the scroll smooth
-    // the vic memory pointers register holds a value
+    // We're double buffering to keep the scroll smooth.
+    // The vic memory pointers register holds a value
     // indicating the offset of the screen buffer.
     // We're going to assemble the new screen in a 
     // different buffer and then flip the vic over to
@@ -266,26 +272,112 @@ end_up:
 handle_right:
     // check for scroll right
     cmp #SC_D
-    bne handle_left
+    beq !+
+    jmp handle_left
+!:
 
-    // TODO: Check bounds!
+    // Check bounds!
+    lda background_x_pos
+    cmp #MAP_WIDTH - SCREEN_WIDTH - 1
+    bne !+ 
+    jmp loop_done
+!:
 
+    ///////////////////////////////////////////
     // scroll right
-    // lda #BLUE
-    // sta vic.border_colour
-    
+    ///////////////////////////////////////////
+
+    // start by decrementing the hardware scroll
+    // value whic is in the 3 least significant
+    // bits of the vic control register
+    lda background_x_pos_fine
+    sec
+    sbc #1
+    sta background_x_pos_fine
+    and #7
+    sta scroll_temp
+    lda vic.control_register_2
+    and #$f8
+    ora scroll_temp
+    sta vic.control_register_2
+
+    // if the hardware scroll has reached it's
+    // maximum value, we need to shift the screen
+    // left a column before it cycles back to 0
+    lda background_x_pos_fine
+    and #7
+    cmp #0
+    beq !+ 
+    jmp end_right
+!:
+    // if we get here, it's because we need to shift
+    // the whole screen left by one column.
+
+    // update our 'coarse' background x position
+    inc background_x_pos
+
+    // We're double buffering to keep the scroll smooth.
+    // The vic memory pointers register holds a value
+    // indicating the offset of the screen buffer.
+    // We're going to assemble the new screen in a 
+    // different buffer and then flip the vic over to
+    // to that buffer when we're done.
+    lda vic.memory_pointers
+    and #$10
+    bne buffer_1_to_buffer_2
+    jmp buffer_2_to_buffer_1
+
+buffer_1_to_buffer_2:    
+    shift_screen_left(SCREEN_CHAR_BUFFER_1, SCREEN_CHAR_BUFFER_2)
+    jmp buffer_copy_done
+
+buffer_2_to_buffer_1:
+    shift_screen_left(SCREEN_CHAR_BUFFER_2, SCREEN_CHAR_BUFFER_1)
+
+buffer_copy_done:
+
+    // wait for a good raster position
+    wait_for_raster(251)
+
+    // toggle the char buffer
+    lda vic.memory_pointers
+    eor #$30
+    sta vic.memory_pointers
+
+end_right:
     jmp loop_done
 
 handle_left:
     // check for scroll left
     cmp #SC_A
-    bne loop_done
+    beq !+
+    jmp loop_done
+!:
 
-    // TODO: Check bounds!
+    // Check bounds!
+    lda background_x_pos
+    cmp #0
+    bne !+ 
+    jmp loop_done
+!:
 
+    ///////////////////////////////////////////
     // scroll left
-    lda #GREEN
-    sta vic.border_colour
+    ///////////////////////////////////////////
+
+    // start by incrementing the hardware scroll
+    // value whic is in the 3 least significant
+    // bits of the vic control register
+    lda background_x_pos_fine
+    clc
+    adc #1
+    sta background_x_pos_fine
+    and #7
+    sta scroll_temp
+    lda vic.control_register_2
+    and #$f8
+    ora scroll_temp
+    sta vic.control_register_2
     
 loop_done:
     // raster time
@@ -431,12 +523,99 @@ done_frame:
 }
 
 ///////////////////////////////////////////////////////////////////
+// name: shift_screen_left
+// Parameters:
+//      screen_src: address of the buffer holding the source data
+//      screen_dst: address of the buffer that will receive the
+//                  data
+// Description: Shifts the screen left and populate the new row from 
+//              the screen map
+////////////////////////////////////////////////////////////////////
+.macro shift_screen_left(screen_src, screen_dst) {
+
+    ldx #0
+!:
+    lda screen_src + 1, x
+    sta screen_dst, x
+    inx 
+    bne !- 
+
+    ldx #0
+!:
+    lda screen_src + 256 + 1, x
+    sta screen_dst + 256, x
+    inx 
+    bne !- 
+
+    ldx #0
+!:
+    lda screen_src + 512 + 1, x
+    sta screen_dst + 512, x
+    inx 
+    bne !- 
+
+    ldx #0
+!:
+    lda screen_src + 768 + 1, x
+    sta screen_dst + 768, x
+    inx 
+    cpx #232
+    bne !- 
+
+    // $fb:$fc  0028 : $3000 : map character data Ptr
+    // $fd:$fe  0004 : $0400 : screen memory Ptr  
+    // locate the map char start address based on background y pos
+    lda background_y_pos
+    tax
+    lda map_row_char_start_addresses.lo, x 
+    sta $fb 
+    lda map_row_char_start_addresses.hi, x
+    sta $fc
+
+    // add in the x pos
+    lda $fb
+    clc
+    adc background_x_pos 
+    sta $fb
+    lda $fc
+    adc #0
+    sta $fc 
+
+    // add in the screen width - 1 to get the last column
+    lda $fb
+    clc
+    adc #SCREEN_WIDTH - 1
+    sta $fb
+    lda $fc
+    adc #0
+    sta $fc 
+
+    // write the column of characters from the map data
+    // to the last column on the screen
+    ldy #0
+    .for(var i=0; i<25; i++) {
+        lda ($fb), y
+        sta screen_dst + (SCREEN_WIDTH - 1) + (SCREEN_WIDTH * i)
+
+        .if (i < 24) {
+            lda $fb
+            clc
+            adc #MAP_WIDTH
+            sta $fb
+            lda $fc
+            adc #0
+            sta $fc 
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////
 // name: shift_screen_up
 // Parameters:
 //      screen_src: address of the buffer holding the source data
 //      screen_dst: address of the buffer that will receive the
 //                  data
-// Descriptoin: Shifts the screen up and populate the new row from 
+// Description: Shifts the screen up and populate the new row from 
 //              the screen map
 ////////////////////////////////////////////////////////////////////
 .macro shift_screen_up(screen_src, screen_dst) {
@@ -476,12 +655,10 @@ done_frame:
     // locate the map char start address based on background y pos
     lda background_y_pos
     adc #25
-    asl 
     tax
-    lda map_row_char_start_addresses, x 
+    lda map_row_char_start_addresses.lo, x 
     sta $fb 
-    inx 
-    lda map_row_char_start_addresses, x
+    lda map_row_char_start_addresses.hi, x
     sta $fc
 
     // add in the x pos
@@ -504,7 +681,7 @@ done_frame:
 
 ///////////////////////////////////////////////////////////////////
 // name: shift_screen_down
-// Descriptoin: Shifts the screen down and populate the new row from 
+// Description: Shifts the screen down and populate the new row from 
 //              the screen map
 ////////////////////////////////////////////////////////////////////
 .macro shift_screen_down(screen_src, screen_dst) {
@@ -542,12 +719,10 @@ done_frame:
 
     // get an index of the start of the correct character data row
     lda background_y_pos
-    asl 
     tax
-    lda map_row_char_start_addresses, x 
+    lda map_row_char_start_addresses.lo, x 
     sta $fb 
-    inx 
-    lda map_row_char_start_addresses, x
+    lda map_row_char_start_addresses.hi, x
     sta $fc
 
     // add in the x pos
@@ -594,7 +769,7 @@ done_frame:
 }
 
 // Character bitmap definitions 2k
-*=$2000
+*=$2000 "Character Bitmaps"
 	.byte	$3C, $66, $6E, $6E, $60, $62, $3C, $00
 	.byte	$18, $3C, $66, $7E, $66, $66, $66, $00
 	.byte	$7C, $66, $66, $7C, $66, $66, $7C, $00
@@ -853,29 +1028,29 @@ done_frame:
 	.byte	$0F, $0F, $0F, $0F, $F0, $F0, $F0, $F0
 
 // screen character data
-*=$3000
+*=$3000 "Map Data"
 map_character_codes:
 	// character codes (4000 bytes)
-    .byte $20,$20,$20,$20,$95,$95,$95,$95,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$59
-    .byte $20,$20,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$59,$20
-    .byte $20,$95,$95,$95,$95,$95,$95,$95,$20,$95,$20,$20,$20,$95,$20,$20,$20,$20,$95,$95,$20,$20,$95,$95,$95,$20,$20,$67,$20,$20,$20,$20,$67,$20,$20,$67,$20,$67,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$95,$95,$95,$95,$95,$95,$20,$95,$20,$20,$20,$95,$20,$20,$95,$95,$20,$20,$20,$20,$20,$20,$95,$20,$20,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$95,$95,$95,$95,$95,$95,$20,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$20,$20,$20,$95,$95,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$95,$95,$95,$95,$95,$95,$20,$20,$20,$20,$95,$20,$20,$20,$20,$20,$20,$95,$95,$95,$95,$20,$20,$20,$20,$67,$20,$20,$20,$20,$67,$67,$67,$67,$67,$67,$67,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$EB,$EB,$EB,$20,$EB,$EB,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$95,$95,$95,$95,$95,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$95,$95,$95,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$67,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$95,$95,$20,$20,$20,$20,$6A,$6A,$6A,$6A,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$EB,$20,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$6A,$6A,$6A,$6A,$6A,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$6A,$20,$6A,$6A,$6A,$6A,$6A,$20,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$67,$67,$67,$67,$67,$67,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$EB,$20,$20,$EB,$EB,$EB,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$6A,$6A,$6A,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$80,$80,$80,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$EB,$EB,$20,$EB,$EB,$EB,$EB,$EB,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$80,$80,$80,$80,$20,$20,$20,$80,$80,$80,$20,$20,$20,$EB,$20,$20,$20,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$20,$EB,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$6A,$6A,$20,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$80,$80,$80,$80,$80,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$EB,$EB,$EB,$20,$EB,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$6A,$6A,$6A,$6A,$6A,$20,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$80,$80,$80,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$80,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$6A,$6A,$6A,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$80,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$EB,$EB,$EB,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$6A,$20,$20,$6A,$6A,$20,$20,$20,$80,$80,$20,$80,$80,$80,$20,$20,$20,$20,$20,$20,$20,$80,$80,$20,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$20,$20,$6A,$6A,$6A,$20,$20,$20,$20,$6A,$20,$6A,$6A,$20,$20,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$20,$20,$80,$20,$20,$80,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20
-    .byte $20,$20,$20,$20,$20,$20,$20,$20,$20,$6A,$6A,$6A,$6A,$6A,$6A,$6A,$6A,$20,$20,$80,$80,$80,$80,$80,$80,$20,$80,$80,$80,$80,$80,$80,$20,$80,$80,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20
+    .byte $20,$20,$20,$20,$95,$95,$95,$95,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$5A
+    .byte $20,$20,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$59,$59
+    .byte $20,$95,$95,$95,$95,$95,$95,$95,$20,$95,$20,$20,$20,$95,$20,$20,$20,$20,$95,$95,$20,$20,$95,$95,$95,$20,$20,$67,$20,$20,$20,$20,$67,$20,$20,$67,$20,$67,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$58
+    .byte $20,$20,$95,$95,$95,$95,$95,$95,$20,$95,$20,$20,$20,$95,$20,$20,$95,$95,$20,$20,$20,$20,$20,$20,$95,$20,$20,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$57
+    .byte $20,$20,$95,$95,$95,$95,$95,$95,$20,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$95,$20,$20,$20,$95,$95,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$56
+    .byte $20,$20,$20,$95,$95,$95,$95,$95,$95,$20,$20,$20,$20,$95,$20,$20,$20,$20,$20,$20,$95,$95,$95,$95,$20,$20,$20,$20,$67,$20,$20,$20,$20,$67,$67,$67,$67,$67,$67,$67,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$EB,$EB,$EB,$20,$EB,$EB,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$55
+    .byte $20,$20,$95,$95,$95,$95,$95,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$54
+    .byte $20,$20,$95,$95,$95,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$67,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$53
+    .byte $20,$20,$95,$95,$20,$20,$20,$20,$6A,$6A,$6A,$6A,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$EB,$20,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$52
+    .byte $20,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$6A,$6A,$6A,$6A,$6A,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$51
+    .byte $20,$20,$20,$20,$20,$6A,$20,$6A,$6A,$6A,$6A,$6A,$20,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$67,$67,$67,$67,$67,$67,$67,$67,$67,$67,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$EB,$20,$20,$EB,$EB,$EB,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$50
+    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$6A,$6A,$6A,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$4f
+    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$80,$80,$80,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$EB,$EB,$20,$EB,$EB,$EB,$EB,$EB,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$4e
+    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$80,$80,$80,$80,$20,$20,$20,$80,$80,$80,$20,$20,$20,$EB,$20,$20,$20,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$20,$EB,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$4d
+    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$6A,$6A,$20,$6A,$6A,$20,$20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$80,$80,$80,$80,$80,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$EB,$EB,$EB,$20,$EB,$20,$20,$20,$20,$4c
+    .byte $20,$20,$20,$20,$20,$6A,$20,$20,$20,$6A,$6A,$6A,$6A,$6A,$20,$20,$20,$20,$20,$20,$6A,$6A,$20,$20,$20,$20,$80,$80,$80,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$80,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$EB,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$4b
+    .byte $20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$6A,$6A,$6A,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$80,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$EB,$EB,$EB,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$4a
+    .byte $20,$20,$20,$20,$20,$20,$6A,$20,$20,$20,$20,$20,$20,$20,$6A,$20,$20,$6A,$6A,$20,$20,$20,$80,$80,$20,$80,$80,$80,$20,$20,$20,$20,$20,$20,$20,$80,$80,$20,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$49
+    .byte $20,$20,$20,$20,$20,$20,$20,$6A,$6A,$6A,$20,$20,$20,$20,$6A,$20,$6A,$6A,$20,$20,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$80,$20,$20,$80,$20,$20,$80,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$48
+    .byte $20,$20,$20,$20,$20,$20,$20,$20,$20,$6A,$6A,$6A,$6A,$6A,$6A,$6A,$6A,$20,$20,$80,$80,$80,$80,$80,$80,$20,$80,$80,$80,$80,$80,$80,$20,$80,$80,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$47
     .byte $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$80,$80,$80,$80,$20,$20,$80,$80,$80,$80,$80,$20,$80,$80,$80,$80,$80,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$20,$20,$20,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20
     .byte $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$80,$80,$80,$20,$20,$20,$20,$20,$80,$20,$80,$80,$80,$80,$80,$80,$80,$80,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$EB,$EB,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
     .byte $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$80,$80,$20,$80,$20,$20,$20,$80,$20,$20,$80,$20,$20,$20,$80,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$80,$20,$20,$80,$20,$20,$20,$20,$80,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$EB,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
@@ -908,7 +1083,7 @@ map_character_codes:
     .byte $20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20,$20
 
 // screen color data
-*=$4000
+*=$4000 "Map Colour Data"
 map_colour_data:
     // color codes (4000 bytes)
     .byte $0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E,$0E

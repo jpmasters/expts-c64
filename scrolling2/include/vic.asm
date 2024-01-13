@@ -9,9 +9,11 @@ Map of the VIC II Registers
     .label CR_BITMAP_MODE                   = $20
     .label CR_BLANK_SCREEN_TO_BORDER_COLOUR = $10
     .label CR_24_25_ROW_SELECT              = $08
-    .label control_register     = $d011
+    .label control_register                 = $d011
+    .label raster_scan_line                 = $d012
 
-    .label raster_scan_line     = $d012
+    .label CR2_38_40_COL_SELECT             = $08
+    .label control_register_2               = $d016
 
     // Bits 0:3 Character Definition Base, Bits 4:8 Screen Base Address
     .label memory_pointers      = $d018
