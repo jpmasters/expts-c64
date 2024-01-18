@@ -324,17 +324,17 @@ handle_right:
     // to that buffer when we're done.
     lda vic.memory_pointers
     and #$10
-    bne buffer_1_to_buffer_2
-    jmp buffer_2_to_buffer_1
+    bne !buffer_1_to_buffer_2+
+    jmp !buffer_2_to_buffer_1+
 
-buffer_1_to_buffer_2:    
+!buffer_1_to_buffer_2:    
     shift_screen_left(SCREEN_CHAR_BUFFER_1, SCREEN_CHAR_BUFFER_2)
-    jmp buffer_copy_done
+    jmp !buffer_copy_done+
 
-buffer_2_to_buffer_1:
+!buffer_2_to_buffer_1:
     shift_screen_left(SCREEN_CHAR_BUFFER_2, SCREEN_CHAR_BUFFER_1)
 
-buffer_copy_done:
+!buffer_copy_done:
 
     // wait for a good raster position
     wait_for_raster(251)
@@ -378,6 +378,55 @@ handle_left:
     and #$f8
     ora scroll_temp
     sta vic.control_register_2
+
+    // if the hardware scroll has reached it's
+    // maximum value, we need to shift the screen
+    // left a column before it cycles back to 0
+    lda background_x_pos_fine
+    and #7
+    cmp #7
+    beq !+ 
+    jmp end_left
+!:
+
+    // if we get here, it's because we need to shift
+    // the whole screen right by one column.
+
+    // update our 'coarse' background x position
+    dec background_x_pos
+
+    // We're double buffering to keep the scroll smooth.
+    // The vic memory pointers register holds a value
+    // indicating the offset of the screen buffer.
+    // We're going to assemble the new screen in a 
+    // different buffer and then flip the vic over to
+    // to that buffer when we're done.
+    lda vic.memory_pointers
+    and #$10
+    bne !buffer_1_to_buffer_2+
+    jmp !buffer_2_to_buffer_1+
+
+!buffer_1_to_buffer_2:    
+    shift_screen_right(SCREEN_CHAR_BUFFER_1, SCREEN_CHAR_BUFFER_2)
+    jmp !buffer_copy_done+
+
+!buffer_2_to_buffer_1:
+    shift_screen_right(SCREEN_CHAR_BUFFER_2, SCREEN_CHAR_BUFFER_1)
+
+!buffer_copy_done:
+
+    // wait for a good raster position
+    wait_for_raster(251)
+
+    // toggle the char buffer
+    lda vic.memory_pointers
+    eor #$30
+    sta vic.memory_pointers
+
+// more keys may need checking here, inwhich case
+// uncomment the jmp loop_done
+end_left:
+    //jmp loop_done
     
 loop_done:
     // raster time
@@ -591,11 +640,92 @@ done_frame:
     sta $fc 
 
     // write the column of characters from the map data
-    // to the last column on the screen
+    // to the last column on the screen. This is unrolled
+    // into 25 individual writes and additions rather than
+    // using indirect writes to speed things up a bit.
     ldy #0
     .for(var i=0; i<25; i++) {
         lda ($fb), y
         sta screen_dst + (SCREEN_WIDTH - 1) + (SCREEN_WIDTH * i)
+
+        .if (i < 24) {
+            lda $fb
+            clc
+            adc #MAP_WIDTH
+            sta $fb
+            lda $fc
+            adc #0
+            sta $fc 
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////
+// name: shift_screen_right
+// Parameters:
+//      screen_src: address of the buffer holding the source data
+//      screen_dst: address of the buffer that will receive the
+//                  data
+// Description: Shifts the screen right and populate the new row from 
+//              the screen map
+////////////////////////////////////////////////////////////////////
+.macro shift_screen_right(screen_src, screen_dst) {
+
+    ldx #$0
+!:
+    lda screen_src + $3e7 - 1 - $ff, x
+    sta screen_dst + $3e7 - $ff, x 
+    dex 
+    bne !-
+
+    ldx #$0
+!:
+    lda screen_src + $2e7 -  1 - $ff, x
+    sta screen_dst + $2e7 - $ff, x 
+    dex 
+    bne !-
+
+    ldx #$0
+!:
+    lda screen_src + $1e7 - 1 - $ff, x
+    sta screen_dst + $1e7 - $ff, x 
+    dex 
+    bne !-
+
+    ldx #$0
+!:
+    lda screen_src + $e7 - 1 - $ff, x
+    sta screen_dst + $e7 - $ff, x 
+    dex 
+    bne !-
+
+    // $fb:$fc  0028 : $3000 : map character data Ptr
+    // $fd:$fe  0004 : $0400 : screen memory Ptr  
+    // locate the map char start address based on background y pos
+    lda background_y_pos
+    tax
+    lda map_row_char_start_addresses.lo, x 
+    sta $fb 
+    lda map_row_char_start_addresses.hi, x
+    sta $fc
+
+    // add in the x pos
+    lda $fb
+    clc
+    adc background_x_pos 
+    sta $fb
+    lda $fc
+    adc #0
+    sta $fc 
+
+    // write the column of characters from the map data
+    // to the first column on the screen. This is unrolled
+    // into 25 individual writes and additions rather than
+    // using indirect writes to speed things up a bit.
+    ldy #0
+    .for(var i=0; i<25; i++) {
+        lda ($fb), y
+        sta screen_dst + (SCREEN_WIDTH * i)
 
         .if (i < 24) {
             lda $fb
