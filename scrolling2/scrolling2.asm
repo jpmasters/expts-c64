@@ -3,6 +3,7 @@
     1. Use the hardware scrolling features of the VIC II chip to achieve smoother scrolling in X & Y
     2. Speed up the character scrolling by only referencing the map when new rows or columns need to be
        added to the character / colour memory.
+    3. Make the scrolling smooth by double buffering the screen memory.
 
     Zero Page:
     ==========
@@ -51,20 +52,20 @@ BasicUpstart2(main)
 scroll_offset_lo: .byte 0
 scroll_offset_hi: .byte 0
 
+// the fine values hold values from 0 to 7 and are used to control the hardware 
+// scroll bits in the VIC control registers. The other two hold the map character
+// offsets for the top left of the current location.
 background_x_pos_fine: .byte 0
 background_x_pos:      .byte 0
-
 background_y_pos_fine: .byte 7
 background_y_pos:     .byte 0
 
 // these pre-calculated offsets make it easier to find rows in the map to display
-// TODO: Either turn these into lo hi tables or remove them and use the map_row_offsets
-//       tables instead (just add the base address where needed)
 map_row_char_start_addresses: .lohifill MAP_HEIGHT, map_character_codes + (i * MAP_WIDTH)
 map_row_colour_start_addresses: .lohifill MAP_HEIGHT, map_colour_data + (i * MAP_WIDTH)
-
 map_row_offets: .lohifill MAP_HEIGHT, i * MAP_WIDTH
 
+// Temporary variable used in scrolling. This should probably be in zero page.
 scroll_temp: .byte 0
 
 main:
@@ -77,7 +78,6 @@ main:
     lda vic.control_register_2
     and #$ff - vic.CR2_38_40_COL_SELECT
     sta vic.control_register_2
-
 
     // disable SHIFT-Commodore
     lda #$80
@@ -106,7 +106,6 @@ main:
 
     // start by drawing the whole screen
     jsr draw_entire_screen
-
 
 // main game loop
 main_loop:
@@ -157,7 +156,7 @@ handle_down:
     ora scroll_temp
     sta vic.control_register
     
-    // if the hardware scroll has reached it's
+    // if the hardware scroll has reached its
     // maximum value, we need to shift the screen
     // up a row before it cycles back to 0
     lda background_y_pos_fine
