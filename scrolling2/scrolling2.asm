@@ -748,10 +748,6 @@ done_frame:
 //              the screen map
 ////////////////////////////////////////////////////////////////////
 .macro shift_screen_up(screen_src, screen_dst) {
-
-    // lda #RED
-    // sta vic.border_colour
-
     ldx #0
 !:
     lda screen_src + SCREEN_WIDTH, x
