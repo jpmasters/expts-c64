@@ -13,9 +13,6 @@ BasicUpstart2(main)
 #importonce
 #import "include/sid.asm"
 
-// video memory locations are defined here as they are application specific
-// note that we define 2 locations so that we can use double buffering to 
-// try to smooth out the scrolling
 .const SCREEN_CHAR_BUFFER_1 = $0400
 .const SCREEN_ADDR_LO = $f7
 .const SCREEN_ADDR_HI = $f8
